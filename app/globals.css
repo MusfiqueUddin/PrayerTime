@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+body { @apply bg-bg text-white; }
+.card { @apply bg-card rounded-2xl p-5 shadow-glow border border-white/5; }
+.headline { @apply text-2xl font-semibold tracking-tight; }
+.input { @apply bg-black/30 border border-white/10 rounded-xl px-3 py-2 outline-none; }
+.btn { @apply px-4 py-2 rounded-xl border; }
+.btn-accent { @apply bg-accent/20 border-accent/40 hover:bg-accent/30; }
+.btn-neon { @apply bg-neon/20 border-neon/40 hover:bg-neon/30; }
+.badge { @apply rounded-lg border px-3 py-2; }
