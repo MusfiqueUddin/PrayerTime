@@ -9,12 +9,14 @@ export async function ensureSchema() {
     name TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   );`;
+
   await sql`CREATE TABLE IF NOT EXISTS members (
     id TEXT PRIMARY KEY,
     room_code TEXT NOT NULL REFERENCES rooms(code) ON DELETE CASCADE,
     person TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   );`;
+
   await sql`CREATE TABLE IF NOT EXISTS entries (
     id TEXT PRIMARY KEY,
     room_code TEXT NOT NULL REFERENCES rooms(code) ON DELETE CASCADE,
@@ -24,7 +26,11 @@ export async function ensureSchema() {
     status TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   );`;
+
   await sql`CREATE INDEX IF NOT EXISTS idx_entries_room_date_person ON entries(room_code, date, person);`;
+
+  -- Create a unique key so one row per (room, person)
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_members_room_person ON members(room_code, person);`;
 }
 
 export async function createRoom(code: string, name: string) {
@@ -41,13 +47,25 @@ export async function getRoom(code: string) {
 
 export async function joinRoom(memberId: string, code: string, person: string) {
   await ensureSchema();
-  await sql`INSERT INTO members (id, room_code, person) VALUES (${memberId}, ${code}, ${person})
-            ON CONFLICT (id) DO UPDATE SET person=EXCLUDED.person, room_code=EXCLUDED.room_code;`;
+  // Upsert on (room_code, person) so we don't create duplicates
+  await sql`
+    INSERT INTO members (id, room_code, person)
+    VALUES (${memberId}, ${code}, ${person})
+    ON CONFLICT (room_code, person)
+    DO UPDATE SET person = EXCLUDED.person;
+  `;
 }
 
 export async function listMembers(code: string) {
   await ensureSchema();
-  const { rows } = await sql`SELECT id, person FROM members WHERE room_code=${code} ORDER BY person ASC;`;
+  // Distinct by person to hide any old duplicates already in DB
+  const { rows } = await sql`
+    SELECT MIN(id) AS id, person
+    FROM members
+    WHERE room_code=${code}
+    GROUP BY person
+    ORDER BY person ASC;
+  `;
   return rows as { id:string, person:string }[];
 }
 
@@ -60,10 +78,16 @@ export async function addEntry(entryId: string, e: { room_code:string; person:st
 export async function getEntries(room: string, person: string, sinceISO?: string) {
   await ensureSchema();
   if (sinceISO) {
-    const { rows } = await sql`SELECT * FROM entries WHERE room_code=${room} AND person=${person} AND date >= ${sinceISO} ORDER BY date ASC`;
+    const { rows } = await sql`
+      SELECT * FROM entries
+      WHERE room_code=${room} AND person=${person} AND date >= ${sinceISO}
+      ORDER BY date ASC`;
     return rows as any[];
   }
-  const { rows } = await sql`SELECT * FROM entries WHERE room_code=${room} AND person=${person} ORDER BY date ASC`;
+  const { rows } = await sql`
+    SELECT * FROM entries
+    WHERE room_code=${room} AND person=${person}
+    ORDER BY date ASC`;
   return rows as any[];
 }
 
