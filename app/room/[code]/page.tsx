@@ -13,6 +13,10 @@ export default function RoomPage({ params }: { params: { code: string } }) {
   const [now, setNow] = useState(new Date());
   const [members, setMembers] = useState<{id:string, person:string}[]>([]);
   const [heat, setHeat] = useState<Record<string, Record<string, number>>>({});
+  const [statusMap, setStatusMap] = useState<Record<PrayerName, Status | null>>({
+    fajr: null, dhuhr: null, asr: null, maghrib: null, isha: null
+  });
+
   const today = useMemo(() => format(now, 'yyyy-MM-dd'), [now]);
   const times = useMemo(() => getTodayTimes(now), [now]);
 
@@ -55,12 +59,15 @@ export default function RoomPage({ params }: { params: { code: string } }) {
   }, [time, now]);
 
   async function mark(prayer: PrayerName, status: Status) {
-    if (!person) { alert('Set your name on the home page first!'); return; }
+    if (!person) { alert('Save your name on Home page first!'); return; }
     const res = await fetch('/api/entry', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ room, person, date: today, prayer, status })
     });
-    if (!res.ok) alert('Failed to save');
+    const data = await res.json().catch(()=>null);
+    if (!res.ok) return alert('Failed to save: ' + (data?.error || res.statusText));
+    // locally highlight selected status
+    setStatusMap(prev => ({ ...prev, [prayer]: status }));
     await refreshHeatmaps();
   }
 
@@ -97,9 +104,9 @@ export default function RoomPage({ params }: { params: { code: string } }) {
             <div key={p} className="p-4 bg-black/20 rounded-xl border border-white/5">
               <div className="text-sm text-muted">{p.toUpperCase()}</div>
               <div className="mt-3 grid grid-cols-3 gap-2">
-                <MarkBtn onClick={() => mark(p,'prayed')} label="Prayed" />
-                <MarkBtn onClick={() => mark(p,'late')} label="Late" />
-                <MarkBtn onClick={() => mark(p,'missed')} label="Missed" />
+                <MarkBtn active={statusMap[p] === 'prayed'}  onClick={() => mark(p,'prayed')}  label="Prayed"  kind="prayed"  />
+                <MarkBtn active={statusMap[p] === 'late'}    onClick={() => mark(p,'late')}    label="Late"    kind="late"    />
+                <MarkBtn active={statusMap[p] === 'missed'}  onClick={() => mark(p,'missed')}  label="Missed"  kind="missed"  />
               </div>
             </div>
           ))}
@@ -113,11 +120,12 @@ export default function RoomPage({ params }: { params: { code: string } }) {
             <div key={m.id}>
               <div className="mb-2 font-medium">{m.person}</div>
               <div className="overflow-x-auto">
+                {/* one heatmap per person */}
                 <Heatmap days={120} data={heat[m.person] || {}} />
               </div>
             </div>
           ))}
-          {members.length===0 && <div className="text-muted text-sm">No members yet. Ask friends to join with this room code.</div>}
+          {members.length===0 && <div className="text-muted text-sm">No members yet. Share your room code.</div>}
         </div>
       </section>
     </div>
@@ -133,14 +141,27 @@ function Time({label, value}:{label:string, value:string}) {
   );
 }
 
-function MarkBtn({label, onClick}:{label:string; onClick:()=>void}) {
+function MarkBtn({
+  label, onClick, kind, active
+}: {label:string; onClick:()=>void; kind: 'prayed'|'late'|'missed'; active?: boolean}) {
+  const base =
+    'cursor-pointer select-none transition-transform active:scale-95 focus:outline-none focus:ring ' +
+    'px-2 py-2 rounded-lg text-xs border w-full';
+  const palette =
+    kind === 'prayed'
+      ? active
+        ? 'bg-emerald-500 text-black border-emerald-500'
+        : 'bg-emerald-500/10 text-white border-emerald-400/50 hover:bg-emerald-500/20'
+      : kind === 'late'
+      ? active
+        ? 'bg-yellow-400 text-black border-yellow-400'
+        : 'bg-yellow-400/10 text-white border-yellow-400/50 hover:bg-yellow-400/20'
+      : active
+        ? 'bg-red-400 text-black border-red-400'
+        : 'bg-red-400/10 text-white border-red-400/50 hover:bg-red-400/20';
+
   return (
-    <button onClick={onClick}
-      className="px-2 py-2 rounded-lg text-xs border w-full
-      data-[kind=prayed]:border-accent/50 data-[kind=prayed]:bg-accent/10 hover:data-[kind=prayed]:bg-accent/20
-      data-[kind=late]:border-yellow-400/50 data-[kind=late]:bg-yellow-400/10 hover:data-[kind=late]:bg-yellow-400/20
-      data-[kind=missed]:border-red-400/50 data-[kind=missed]:bg-red-400/10 hover:data-[kind=missed]:bg-red-400/20"
-      data-kind={label.toLowerCase()}>
+    <button type="button" onClick={onClick} className={`${base} ${palette}`}>
       {label}
     </button>
   );
