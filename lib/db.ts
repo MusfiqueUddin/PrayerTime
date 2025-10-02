@@ -29,7 +29,7 @@ export async function ensureSchema() {
 
   await sql`CREATE INDEX IF NOT EXISTS idx_entries_room_date_person ON entries(room_code, date, person);`;
 
-  -- Create a unique key so one row per (room, person)
+  // Create a unique key so there is only one row per (room_code, person)
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_members_room_person ON members(room_code, person);`;
 }
 
@@ -58,7 +58,7 @@ export async function joinRoom(memberId: string, code: string, person: string) {
 
 export async function listMembers(code: string) {
   await ensureSchema();
-  // Distinct by person to hide any old duplicates already in DB
+  // Distinct by person (hides any legacy duplicates)
   const { rows } = await sql`
     SELECT MIN(id) AS id, person
     FROM members
@@ -69,7 +69,10 @@ export async function listMembers(code: string) {
   return rows as { id:string, person:string }[];
 }
 
-export async function addEntry(entryId: string, e: { room_code:string; person:string; date:string; prayer:PrayerName; status:Status }) {
+export async function addEntry(
+  entryId: string,
+  e: { room_code:string; person:string; date:string; prayer:PrayerName; status:Status }
+) {
   await ensureSchema();
   await sql`INSERT INTO entries (id, room_code, person, date, prayer, status)
             VALUES (${entryId}, ${e.room_code}, ${e.person}, ${e.date}, ${e.prayer}, ${e.status});`;
