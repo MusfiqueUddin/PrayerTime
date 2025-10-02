@@ -6,6 +6,9 @@ import { getTodayTimes, getNextPrayer } from '@/lib/prayer';
 
 type PrayerName = 'fajr'|'dhuhr'|'asr'|'maghrib'|'isha';
 type Status = 'prayed'|'late'|'missed';
+type StatusMap = Record<PrayerName, Status | null>;
+
+const EMPTY_STATUS: StatusMap = { fajr:null, dhuhr:null, asr:null, maghrib:null, isha:null };
 
 export default function RoomPage({ params }: { params: { code: string } }) {
   const room = params.code;
@@ -14,27 +17,68 @@ export default function RoomPage({ params }: { params: { code: string } }) {
   const [now, setNow] = useState(new Date());
   const [members, setMembers] = useState<{id:string, person:string}[]>([]);
   const [heat, setHeat] = useState<Record<string, Record<string, number>>>({});
-  const [statusMap, setStatusMap] = useState<Record<PrayerName, Status | null>>({
-    fajr: null, dhuhr: null, asr: null, maghrib: null, isha: null,
-  });
+  const [statusMap, setStatusMap] = useState<StatusMap>(EMPTY_STATUS);
 
   const today = useMemo(() => format(now, 'yyyy-MM-dd'), [now]);
   const times = useMemo(() => getTodayTimes(now), [now]);
+
+  // LocalStorage key for today's state
+  const lsKey = useMemo(
+    () => (person ? `statusMap:${room}:${person}:${today}` : ''),
+    [room, person, today]
+  );
 
   useEffect(() => {
     const p = localStorage.getItem('person') || '';
     setPerson(p);
     setTempName(p);
-    const id = setInterval(()=>setNow(new Date()), 1000);
-    return ()=>clearInterval(id);
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
   }, []);
 
   useEffect(() => {
     if (!person) return;
-    fetch('/api/join', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ room, person })}).catch(()=>{});
+    fetch('/api/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ room, person }),
+    }).catch(() => {});
   }, [room, person]);
 
   useEffect(() => { refreshMembers(); refreshHeatmaps(); }, [room]);
+
+  useEffect(() => {
+    // On day/person/room change, restore today's status (localStorage first, then DB)
+    (async () => {
+      if (!person) { setStatusMap(EMPTY_STATUS); return; }
+      // 1) Try localStorage
+      if (lsKey) {
+        const raw = localStorage.getItem(lsKey);
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw) as StatusMap;
+            setStatusMap({ ...EMPTY_STATUS, ...parsed });
+            return;
+          } catch {}
+        }
+      }
+      // 2) Fallback to DB (today only)
+      try {
+        const url = `/api/history?room=${room}&person=${encodeURIComponent(person)}&since=${today}`;
+        const data: any[] = await fetch(url).then(r => r.json());
+        const nextMap: StatusMap = { ...EMPTY_STATUS };
+        for (const e of data) {
+          const p = e.prayer as PrayerName;
+          const s = e.status as Status;
+          nextMap[p] = s;
+        }
+        setStatusMap(nextMap);
+        if (lsKey) localStorage.setItem(lsKey, JSON.stringify(nextMap));
+      } catch {
+        // ignore
+      }
+    })();
+  }, [room, person, today, lsKey]);
 
   async function refreshMembers() {
     const m = await fetch(`/api/members?room=${room}`).then(r=>r.json()).catch(()=>[]);
@@ -63,19 +107,25 @@ export default function RoomPage({ params }: { params: { code: string } }) {
     if (!n) return;
     localStorage.setItem('person', n);
     setPerson(n);
-    // immediately join the room after saving
-    fetch('/api/join', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ room, person: n })}).catch(()=>{});
+    fetch('/api/join', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ room, person: n })
+    }).catch(()=>{});
   }
 
   async function mark(prayer: PrayerName, status: Status) {
-    if (!person) return; // UI shows inline setter instead of alert
+    if (!person) return; // name prompt will be shown
     const res = await fetch('/api/entry', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ room, person, date: today, prayer, status })
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ room, person, date: today, prayer, status }),
     });
     const data = await res.json().catch(()=>null);
     if (!res.ok) return alert('Failed to save: ' + (data?.error || res.statusText));
-    setStatusMap(prev => ({ ...prev, [prayer]: status }));
+    // set locally + persist for 24h (today key)
+    const updated: StatusMap = { ...statusMap, [prayer]: status };
+    setStatusMap(updated);
+    if (lsKey) localStorage.setItem(lsKey, JSON.stringify(updated));
     await refreshHeatmaps();
   }
 
@@ -92,8 +142,11 @@ export default function RoomPage({ params }: { params: { code: string } }) {
               value={tempName}
               onChange={e=>setTempName(e.target.value)}
             />
-            <button type="button" onClick={saveNameInline}
-              className="px-4 py-2 rounded-xl border bg-neon/20 border-neon/40 hover:bg-neon/30">
+            <button
+              type="button"
+              onClick={saveNameInline}
+              className="px-4 py-2 rounded-xl border bg-neon/20 border-neon/40 hover:bg-neon/30"
+            >
               Save
             </button>
           </div>
@@ -148,7 +201,6 @@ export default function RoomPage({ params }: { params: { code: string } }) {
             <div key={m.id}>
               <div className="mb-2 font-medium">{m.person}</div>
               <div className="overflow-x-auto">
-                {/* exactly one heatmap per member */}
                 <Heatmap days={120} data={heat[m.person] || {}} />
               </div>
             </div>
@@ -177,16 +229,13 @@ function MarkBtn({
     'px-2 py-1.5 rounded-lg text-[11px] leading-4 whitespace-nowrap border w-full';
   const palette =
     kind === 'prayed'
-      ? active
-        ? 'bg-emerald-500 text-black border-emerald-500'
-        : 'bg-emerald-500/10 text-white border-emerald-400/50 hover:bg-emerald-500/20'
+      ? (active ? 'bg-emerald-500 text-black border-emerald-500'
+                : 'bg-emerald-500/10 text-white border-emerald-400/50 hover:bg-emerald-500/20')
       : kind === 'late'
-      ? active
-        ? 'bg-yellow-400 text-black border-yellow-400'
-        : 'bg-yellow-400/10 text-white border-yellow-400/50 hover:bg-yellow-400/20'
-      : active
-        ? 'bg-red-400 text-black border-red-400'
-        : 'bg-red-400/10 text-white border-red-400/50 hover:bg-red-400/20';
+      ? (active ? 'bg-yellow-400 text-black border-yellow-400'
+                : 'bg-yellow-400/10 text-white border-yellow-400/50 hover:bg-yellow-400/20')
+      : (active ? 'bg-red-400 text-black border-red-400'
+                : 'bg-red-400/10 text-white border-red-400/50 hover:bg-red-400/20');
 
   return (
     <button type="button" onClick={onClick} className={`${base} ${palette}`}>
