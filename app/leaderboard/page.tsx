@@ -10,7 +10,12 @@ export default function LeaderboardPage() {
   useEffect(() => {
     const r = localStorage.getItem('room') || '';
     setRoom(r);
-    if (r) fetch('/api/leaderboard?room='+r).then(r => r.json()).then(setRows).catch(()=>{});
+    if (r) {
+      fetch('/api/leaderboard?room=' + r)
+        .then(res => res.json())
+        .then(setRows)
+        .catch(() => {});
+    }
   }, []);
 
   return (
@@ -31,15 +36,20 @@ export default function LeaderboardPage() {
           <tbody>
             {rows.map((r, i) => (
               <tr key={r.person} className="border-t border-white/10">
-                <td className="py-2">{i+1}</td>
+                <td className="py-2">{i + 1}</td>
                 <td className="py-2 font-medium">{r.person}</td>
                 <td className="py-2 text-accent">{r.prayed}</td>
                 <td className="py-2 text-yellow-300">{r.late}</td>
                 <td className="py-2 text-red-400">{r.missed}</td>
               </tr>
             ))}
-            {rows.length===0 and (
-              <tr><td colSpan={5} className="py-6 text-center text-muted">No entries yet.</td></tr>
+
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={5} className="py-6 text-center text-muted">
+                  No entries yet.
+                </td>
+              </tr>
             )}
           </tbody>
         </table>
