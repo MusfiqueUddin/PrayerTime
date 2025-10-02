@@ -3,6 +3,30 @@ import { sql } from '@vercel/postgres';
 export type PrayerName = 'fajr'|'dhuhr'|'asr'|'maghrib'|'isha';
 export type Status = 'prayed'|'late'|'missed';
 
+async function createUniqueMembersIndexSafely() {
+  try {
+    // First attempt: fast path if there are no duplicates.
+    await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_members_room_person ON members(room_code, person);`;
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    // If duplicates exist, Postgres throws "could not create unique index ..."
+    if (msg.includes('could not create unique index') || msg.includes('duplicate key value')) {
+      // Remove duplicates, keep the earliest row for each (room_code, person)
+      await sql`
+        DELETE FROM members a
+        USING members b
+        WHERE a.ctid > b.ctid
+          AND a.room_code = b.room_code
+          AND a.person = b.person;
+      `;
+      // Retry creating the unique index
+      await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_members_room_person ON members(room_code, person);`;
+    } else {
+      throw e; // Bubble up unknown errors
+    }
+  }
+}
+
 export async function ensureSchema() {
   await sql`CREATE TABLE IF NOT EXISTS rooms (
     code TEXT PRIMARY KEY,
@@ -29,13 +53,14 @@ export async function ensureSchema() {
 
   await sql`CREATE INDEX IF NOT EXISTS idx_entries_room_date_person ON entries(room_code, date, person);`;
 
-  // Create a unique key so there is only one row per (room_code, person)
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_members_room_person ON members(room_code, person);`;
+  // Ensure one row per (room_code, person); dedupe on the fly if needed
+  await createUniqueMembersIndexSafely();
 }
 
 export async function createRoom(code: string, name: string) {
   await ensureSchema();
-  await sql`INSERT INTO rooms (code, name) VALUES (${code}, ${name}) ON CONFLICT (code) DO NOTHING;`;
+  await sql`INSERT INTO rooms (code, name) VALUES (${code}, ${name})
+            ON CONFLICT (code) DO NOTHING;`;
   return { code, name };
 }
 
@@ -47,7 +72,7 @@ export async function getRoom(code: string) {
 
 export async function joinRoom(memberId: string, code: string, person: string) {
   await ensureSchema();
-  // Upsert on (room_code, person) so we don't create duplicates
+  // Upsert on (room_code, person) so we never create duplicates again
   await sql`
     INSERT INTO members (id, room_code, person)
     VALUES (${memberId}, ${code}, ${person})
@@ -58,7 +83,7 @@ export async function joinRoom(memberId: string, code: string, person: string) {
 
 export async function listMembers(code: string) {
   await ensureSchema();
-  // Distinct by person (hides any legacy duplicates)
+  // Distinct by person (hides any legacy dupes that might slip through)
   const { rows } = await sql`
     SELECT MIN(id) AS id, person
     FROM members
