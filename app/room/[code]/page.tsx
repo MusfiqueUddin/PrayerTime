@@ -10,11 +10,12 @@ type Status = 'prayed'|'late'|'missed';
 export default function RoomPage({ params }: { params: { code: string } }) {
   const room = params.code;
   const [person, setPerson] = useState('');
+  const [tempName, setTempName] = useState('');
   const [now, setNow] = useState(new Date());
   const [members, setMembers] = useState<{id:string, person:string}[]>([]);
   const [heat, setHeat] = useState<Record<string, Record<string, number>>>({});
   const [statusMap, setStatusMap] = useState<Record<PrayerName, Status | null>>({
-    fajr: null, dhuhr: null, asr: null, maghrib: null, isha: null
+    fajr: null, dhuhr: null, asr: null, maghrib: null, isha: null,
   });
 
   const today = useMemo(() => format(now, 'yyyy-MM-dd'), [now]);
@@ -23,6 +24,7 @@ export default function RoomPage({ params }: { params: { code: string } }) {
   useEffect(() => {
     const p = localStorage.getItem('person') || '';
     setPerson(p);
+    setTempName(p);
     const id = setInterval(()=>setNow(new Date()), 1000);
     return ()=>clearInterval(id);
   }, []);
@@ -32,9 +34,7 @@ export default function RoomPage({ params }: { params: { code: string } }) {
     fetch('/api/join', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ room, person })}).catch(()=>{});
   }, [room, person]);
 
-  useEffect(() => {
-    refreshMembers(); refreshHeatmaps();
-  }, [room]);
+  useEffect(() => { refreshMembers(); refreshHeatmaps(); }, [room]);
 
   async function refreshMembers() {
     const m = await fetch(`/api/members?room=${room}`).then(r=>r.json()).catch(()=>[]);
@@ -58,21 +58,48 @@ export default function RoomPage({ params }: { params: { code: string } }) {
     return `${h}:${m}:${ss}`;
   }, [time, now]);
 
+  function saveNameInline() {
+    const n = tempName.trim();
+    if (!n) return;
+    localStorage.setItem('person', n);
+    setPerson(n);
+    // immediately join the room after saving
+    fetch('/api/join', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ room, person: n })}).catch(()=>{});
+  }
+
   async function mark(prayer: PrayerName, status: Status) {
-    if (!person) { alert('Save your name on Home page first!'); return; }
+    if (!person) return; // UI shows inline setter instead of alert
     const res = await fetch('/api/entry', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ room, person, date: today, prayer, status })
     });
     const data = await res.json().catch(()=>null);
     if (!res.ok) return alert('Failed to save: ' + (data?.error || res.statusText));
-    // locally highlight selected status
     setStatusMap(prev => ({ ...prev, [prayer]: status }));
     await refreshHeatmaps();
   }
 
   return (
     <div className="space-y-6">
+      {/* Inline name setter if needed */}
+      {!person && (
+        <div className="card flex flex-col md:flex-row md:items-center gap-2">
+          <div className="text-sm text-muted">Set your name to mark prayers:</div>
+          <div className="flex gap-2">
+            <input
+              className="bg-black/30 border border-white/10 rounded-xl px-3 py-2 outline-none"
+              placeholder="your name"
+              value={tempName}
+              onChange={e=>setTempName(e.target.value)}
+            />
+            <button type="button" onClick={saveNameInline}
+              className="px-4 py-2 rounded-xl border bg-neon/20 border-neon/40 hover:bg-neon/30">
+              Save
+            </button>
+          </div>
+        </div>
+      )}
+
       <section className="card">
         <div className="flex flex-col md:flex-row md:items-end gap-3 justify-between">
           <div>
@@ -85,6 +112,7 @@ export default function RoomPage({ params }: { params: { code: string } }) {
             <div className="text-5xl font-mono mt-2">{countdown}</div>
           </div>
         </div>
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mt-5">
           <div className="md:col-span-3 grid grid-cols-3 md:grid-cols-6 text-center gap-3">
             <Time label="Fajr" value={times.fajr} />
@@ -120,7 +148,7 @@ export default function RoomPage({ params }: { params: { code: string } }) {
             <div key={m.id}>
               <div className="mb-2 font-medium">{m.person}</div>
               <div className="overflow-x-auto">
-                {/* one heatmap per person */}
+                {/* exactly one heatmap per member */}
                 <Heatmap days={120} data={heat[m.person] || {}} />
               </div>
             </div>
@@ -146,7 +174,7 @@ function MarkBtn({
 }: {label:string; onClick:()=>void; kind: 'prayed'|'late'|'missed'; active?: boolean}) {
   const base =
     'cursor-pointer select-none transition-transform active:scale-95 focus:outline-none focus:ring ' +
-    'px-2 py-2 rounded-lg text-xs border w-full';
+    'px-2 py-1.5 rounded-lg text-[11px] leading-4 whitespace-nowrap border w-full';
   const palette =
     kind === 'prayed'
       ? active
